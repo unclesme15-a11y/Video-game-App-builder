@@ -1,9 +1,13 @@
 """Store performance tracker — the "is this app worth real money?" signal.
 
-Pulls views/downloads for every published game from the itch.io server API
-and stores a snapshot. Apps that clear PROMOTE_DOWNLOAD_THRESHOLD get flagged
-as worth the $25 Google Play registration (and, if they keep earning, the
-$99/yr Apple account).
+Verdict logic, in priority order:
+
+1. REVENUE (ground truth): Unity Ads revenue over the last 30 days.
+   >= PROMOTE_REVENUE_THRESHOLD/mo  -> PROMOTE (it already pays for itself on
+   free-store traffic; the same game on Google Play sees far more players)
+2. DOWNLOADS (early signal, before ad data accumulates): itch.io downloads
+   >= PROMOTE_DOWNLOAD_THRESHOLD -> WATCH CLOSELY
+3. Neither -> keep watching, or kill after KILL_AFTER_DAYS with no traction.
 
 Runs on the Acer (cron):  python -m publisher.tracker
 """
@@ -15,8 +19,10 @@ import os
 import requests
 
 from engine.database import store
+from publisher import unity_ads
 
 ITCHIO_API_KEY = os.getenv("ITCHIO_API_KEY", "")
+PROMOTE_REVENUE_THRESHOLD = float(os.getenv("PROMOTE_REVENUE_THRESHOLD", "10"))  # USD / 30 days
 PROMOTE_DOWNLOAD_THRESHOLD = int(os.getenv("PROMOTE_DOWNLOAD_THRESHOLD", "500"))
 
 
@@ -26,9 +32,8 @@ def pull_itchio_metrics() -> list[dict]:
         return []
     r = requests.get(f"https://itch.io/api/1/{ITCHIO_API_KEY}/my-games", timeout=30)
     r.raise_for_status()
-    snapshots = []
-    for game in r.json().get("games", []):
-        snap = {
+    return [
+        {
             "store": "itchio",
             "slug": game.get("url", "").rsplit("/", 1)[-1],
             "title": game.get("title", ""),
@@ -36,24 +41,43 @@ def pull_itchio_metrics() -> list[dict]:
             "downloads": game.get("downloads_count", 0),
             "purchases": game.get("purchases_count", 0),
         }
+        for game in r.json().get("games", [])
+    ]
+
+
+def verdict(revenue_30d: float, downloads: int) -> str:
+    if revenue_30d >= PROMOTE_REVENUE_THRESHOLD:
+        return "PROMOTE — pays for itself; buy the $25 Google Play slot"
+    if downloads >= PROMOTE_DOWNLOAD_THRESHOLD:
+        return "WATCH — traction but revenue unproven; check ad placement"
+    return "keep watching"
+
+
+def snapshot() -> list[dict]:
+    """Combine itch.io traffic with Unity Ads revenue, store, and return rows."""
+    revenue_by_game = unity_ads.revenue_last_30d()
+    rows = []
+    for snap in pull_itchio_metrics():
+        ads = revenue_by_game.get(snap["title"], {"revenue": 0.0, "impressions": 0})
+        snap["revenue_30d"] = round(ads["revenue"], 2)
+        snap["impressions_30d"] = ads["impressions"]
+        snap["verdict"] = verdict(snap["revenue_30d"], snap["downloads"])
         store.add_store_metric(snap)
-        snapshots.append(snap)
-    return snapshots
+        rows.append(snap)
+    return rows
 
 
 def report() -> None:
-    snapshots = pull_itchio_metrics()
-    if not snapshots:
+    rows = snapshot()
+    if not rows:
         print("[tracker] no data")
         return
-    print(f"\n{'title':<32}{'views':>8}{'downloads':>11}  verdict")
-    for s in sorted(snapshots, key=lambda x: -x["downloads"]):
-        verdict = (
-            "PROMOTE -> worth $25 Google Play"
-            if s["downloads"] >= PROMOTE_DOWNLOAD_THRESHOLD
-            else "keep watching"
+    print(f"\n{'title':<28}{'downloads':>10}{'imps/30d':>10}{'rev/30d':>9}  verdict")
+    for s in sorted(rows, key=lambda x: (-x["revenue_30d"], -x["downloads"])):
+        print(
+            f"{s['title'][:26]:<28}{s['downloads']:>10}{s['impressions_30d']:>10}"
+            f"{'$' + str(s['revenue_30d']):>9}  {s['verdict']}"
         )
-        print(f"{s['title'][:30]:<32}{s['views']:>8}{s['downloads']:>11}  {verdict}")
 
 
 if __name__ == "__main__":

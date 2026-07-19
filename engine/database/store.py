@@ -48,6 +48,9 @@ CREATE TABLE IF NOT EXISTS store_metrics (
     views INTEGER DEFAULT 0,
     downloads INTEGER DEFAULT 0,
     purchases INTEGER DEFAULT 0,
+    revenue_30d REAL DEFAULT 0,
+    impressions_30d INTEGER DEFAULT 0,
+    verdict TEXT DEFAULT '',
     captured_at REAL NOT NULL
 );
 
@@ -145,9 +148,11 @@ def add_feedback(opportunity_id: str, outcome: str, notes: str = "") -> None:
 def add_store_metric(snap: dict) -> None:
     with conn() as c:
         c.execute(
-            "INSERT INTO store_metrics (id, store, slug, title, views, downloads, purchases, captured_at) VALUES (?,?,?,?,?,?,?,?)",
+            "INSERT INTO store_metrics (id, store, slug, title, views, downloads, purchases, revenue_30d, impressions_30d, verdict, captured_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (str(uuid.uuid4()), snap["store"], snap["slug"], snap.get("title", ""),
-             snap.get("views", 0), snap.get("downloads", 0), snap.get("purchases", 0), time.time()),
+             snap.get("views", 0), snap.get("downloads", 0), snap.get("purchases", 0),
+             snap.get("revenue_30d", 0.0), snap.get("impressions_30d", 0),
+             snap.get("verdict", ""), time.time()),
         )
 
 

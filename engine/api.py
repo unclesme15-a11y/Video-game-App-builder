@@ -50,13 +50,11 @@ def feedback(body: Feedback):
 
 @app.get("/performance")
 def performance():
-    """Latest snapshot per published app, with a promotion verdict."""
-    import os
-
-    threshold = int(os.getenv("PROMOTE_DOWNLOAD_THRESHOLD", "500"))
+    """Latest snapshot per published app. Verdict is revenue-first: an app is
+    promoted when its last-30-day ad revenue clears the threshold."""
     out = []
     for m in store.latest_store_metrics():
-        m["promote"] = m["downloads"] >= threshold
+        m["promote"] = m["verdict"].startswith("PROMOTE")
         out.append(m)
     return out
 
