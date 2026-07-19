@@ -40,6 +40,17 @@ CREATE TABLE IF NOT EXISTS feedback (
     created_at REAL NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS store_metrics (
+    id TEXT PRIMARY KEY,
+    store TEXT NOT NULL,             -- itchio | amazon | play | apple
+    slug TEXT NOT NULL,
+    title TEXT,
+    views INTEGER DEFAULT 0,
+    downloads INTEGER DEFAULT 0,
+    purchases INTEGER DEFAULT 0,
+    captured_at REAL NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS jobs (
     id TEXT PRIMARY KEY,
     job_type TEXT NOT NULL,          -- llm_batch | unity_build
@@ -127,6 +138,29 @@ def add_feedback(opportunity_id: str, outcome: str, notes: str = "") -> None:
             "INSERT INTO feedback (id, opportunity_id, outcome, notes, created_at) VALUES (?,?,?,?,?)",
             (str(uuid.uuid4()), opportunity_id, outcome, notes, time.time()),
         )
+
+
+# --- store performance snapshots -------------------------------------------
+
+def add_store_metric(snap: dict) -> None:
+    with conn() as c:
+        c.execute(
+            "INSERT INTO store_metrics (id, store, slug, title, views, downloads, purchases, captured_at) VALUES (?,?,?,?,?,?,?,?)",
+            (str(uuid.uuid4()), snap["store"], snap["slug"], snap.get("title", ""),
+             snap.get("views", 0), snap.get("downloads", 0), snap.get("purchases", 0), time.time()),
+        )
+
+
+def latest_store_metrics() -> list[dict]:
+    """Most recent snapshot per (store, slug)."""
+    with conn() as c:
+        rows = c.execute(
+            """SELECT * FROM store_metrics m
+               WHERE captured_at = (SELECT MAX(captured_at) FROM store_metrics
+                                    WHERE store = m.store AND slug = m.slug)
+               ORDER BY downloads DESC"""
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 # --- job queue (Nitro polls these over the API) ----------------------------

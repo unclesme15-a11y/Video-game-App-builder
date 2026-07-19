@@ -18,9 +18,14 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import time
+from pathlib import Path
 
 import requests
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from publisher import amazon_appstore, itchio  # noqa: E402
 
 ACER_URL = os.getenv("ACER_URL", "http://localhost:8000").rstrip("/")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434").rstrip("/")
@@ -54,12 +59,38 @@ def handle_unity_build(payload: dict) -> str:
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
     if proc.returncode != 0:
         raise RuntimeError(f"unity build failed:\n{proc.stdout[-3000:]}\n{proc.stderr[-1000:]}")
+
+    # Chain publish jobs for each requested store — the artifact lives here on
+    # the Nitro, so publishing happens here too.
+    for publish_spec in payload.get("publish_to", []):
+        requests.post(
+            f"{ACER_URL}/jobs",
+            json={"job_type": "publish", "payload": publish_spec | {"project_dir": project_dir}},
+            timeout=10,
+        )
     return f"unity build ok for {project_dir}"
+
+
+def handle_publish(payload: dict) -> str:
+    store_name = payload["store"]
+    if store_name == "itchio":
+        return itchio.publish(
+            artifact_dir=payload.get("artifact_dir", payload["project_dir"] + "/Builds"),
+            game_slug=payload["slug"],
+            channel=payload.get("channel", "windows"),
+        )
+    if store_name == "amazon":
+        return amazon_appstore.publish(
+            apk_path=payload["apk_path"],
+            app_id=payload["app_id"],
+        )
+    raise ValueError(f"unknown store: {store_name}")
 
 
 HANDLERS = {
     "llm_batch": handle_llm_batch,
     "unity_build": handle_unity_build,
+    "publish": handle_publish,
 }
 
 

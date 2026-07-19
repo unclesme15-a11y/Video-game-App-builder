@@ -46,6 +46,21 @@ def feedback(body: Feedback):
     return {"ok": True}
 
 
+# --- store performance -----------------------------------------------------
+
+@app.get("/performance")
+def performance():
+    """Latest snapshot per published app, with a promotion verdict."""
+    import os
+
+    threshold = int(os.getenv("PROMOTE_DOWNLOAD_THRESHOLD", "500"))
+    out = []
+    for m in store.latest_store_metrics():
+        m["promote"] = m["downloads"] >= threshold
+        out.append(m)
+    return out
+
+
 # --- GPU job queue (polled by workers/gpu_worker.py on the Nitro) ----------
 
 class NewJob(BaseModel):
